@@ -1,9 +1,12 @@
 #!/bin/bash
 # ===================================================================================
-# OpenShift Dynamic TLS & Certificate Audit (V11.2 - Service Mesh Hardened)
+# OpenShift Dynamic TLS & Certificate Audit (V11.5 - International/English)
 # Created by Chris Tawfik (ctawfik@redhat.com) | toughIQ (toughiq@gmail.com)
 # with support from Gemini AI
-# Updates: Section [3] logic enhanced for clean Service Mesh detection using printf.
+# Updates: 
+#  - Full localization to Technical English (Comments & Outputs).
+#  - [3] Service Mesh logic: Validates "Status Quo" without enforcing rules.
+#  - [1] Dynamic cipher lookup (No hardcoded values).
 # ===================================================================================
 
 # Colors
@@ -14,12 +17,12 @@ YELLOW="\033[33m"
 BLUE="\033[34m"
 RESET="\033[0m"
 
-# Prerequisites
+# Prerequisites check
 command -v oc >/dev/null 2>&1 || { echo -e "${RED}Error: 'oc' client not found.${RESET}"; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo -e "${RED}Error: 'jq' not found.${RESET}"; exit 1; }
 command -v openssl >/dev/null 2>&1 || { echo -e "${RED}Error: 'openssl' not found.${RESET}"; exit 1; }
 
-echo -e "${BOLD}Starting OpenShift TLS Audit (Service Mesh Ready)...${RESET}"
+echo -e "${BOLD}Starting OpenShift TLS Audit (Dynamic Mode)...${RESET}"
 echo "Cluster: $(oc whoami --show-server)"
 echo "Date: $(date)"
 echo "-----------------------------------------------------------------------------------"
@@ -65,18 +68,14 @@ else
     echo -e "  Minimum TLS Version: ${GREEN}${LIVE_TLS_VER:-Unknown}${RESET} $SOURCE_MSG"
 
     echo "  Active Ciphers:"
-    if [[ "$LIVE_TLS_VER" == *"VersionTLS13"* ]]; then
-        echo -e "    ${GREEN}(TLS 1.3 Mode Enforced - Legacy Ciphers ignored)${RESET}"
-        echo "      - TLS_AES_128_GCM_SHA256"
-        echo "      - TLS_AES_256_GCM_SHA384"
-        echo "      - TLS_CHACHA20_POLY1305_SHA256"
+    # Logic: Try fetching from ConfigMap first. If empty (default profiles usually omit this), use oc explain.
+    LIVE_CIPHERS=$(echo "$KUBE_CONFIG" | grep -A 30 "cipherSuites:" | grep -m 1 -B 30 "minTLSVersion" | grep -v "cipherSuites:" | grep -v "minTLSVersion" | sed 's/^[ \t-]*//' | sed '/^$/d' | grep -v ":")
+    
+    if [ ! -z "$LIVE_CIPHERS" ]; then
+        echo "$LIVE_CIPHERS" | while read line; do echo "    - $line"; done
     else
-        LIVE_CIPHERS=$(echo "$KUBE_CONFIG" | grep -A 30 "cipherSuites:" | grep -m 1 -B 30 "minTLSVersion" | grep -v "cipherSuites:" | grep -v "minTLSVersion" | sed 's/^[ \t-]*//' | sed '/^$/d' | grep -v ":")
-        if [ ! -z "$LIVE_CIPHERS" ]; then
-            echo "$LIVE_CIPHERS" | while read line; do echo "    - $line"; done
-        else
-            get_explain_ciphers "$PROFILE_KEY" | sed 's/^/    - /'
-        fi
+        # Fallback to dynamic documentation lookup based on profile key (works for intermediate, modern/tls1.3, etc.)
+        get_explain_ciphers "$PROFILE_KEY" | sed 's/^/    - /'
     fi
 fi
 
@@ -122,45 +121,72 @@ done
 # ===================================================================================
 echo -e "\n${BOLD}[3] Component: Service Mesh (Istio) Gateways${RESET}"
 
-# Attempt to find the namespace of the ServiceMeshControlPlane (OSSM)
+# 1. Locate the Service Mesh Control Plane (Namespace detection)
 SERVICE_MESH_NS=$(oc get servicemeshcontrolplane -A -o jsonpath='{.items[0].metadata.namespace}' 2>/dev/null)
-GATEWAY_COUNT=$(oc get gateway -A --no-headers 2>/dev/null | wc -l)
 
 if [ ! -z "$SERVICE_MESH_NS" ]; then
     # --- OSSM Control Plane Found ---
-    printf "  Result: %bService Mesh Control Plane gefunden in Namespace: %s%b\n" "$YELLOW" "$SERVICE_MESH_NS" "$RESET"
+    printf "  Status: %bService Mesh Control Plane found (Namespace: %s)%b\n" "$GREEN" "$SERVICE_MESH_NS" "$RESET"
     
-    # Check for active Istio Gateways
-    oc get gateway -n "$SERVICE_MESH_NS" -o json | jq -c '.items[]' | while read -r gw; do
-        GW_NAME=$(echo "$gw" | jq -r '.metadata.name')
-        GW_HOSTS=$(echo "$gw" | jq -r '.spec.servers[] | "\(.hosts | join(", "))"' | sort | uniq)
-        GW_MODES=$(echo "$gw" | jq -r '.spec.servers[] | "\(.tls.mode // "NONE")"' | sort | uniq)
+    # 2. Check if active gateways exist
+    NUM_GATEWAYS=$(oc get gateway -n "$SERVICE_MESH_NS" --no-headers 2>/dev/null | wc -l)
+    
+    if [ "$NUM_GATEWAYS" -eq 0 ]; then
+        # Scenario: Service Mesh installed, but empty (no apps)
+        echo -e "  Result: ${YELLOW}No active gateways defined.${RESET}"
+        echo "          (Service Mesh is running, but no application ingress points are configured.)"
+    else
+        # Scenario: Gateways found -> Audit Status Quo
+        echo -e "  Result: ${BOLD}$NUM_GATEWAYS Gateway(s) found.${RESET}"
+        
+        # Attempt to identify physical Route host for live testing
+        INGRESS_ROUTE_HOST=$(oc get route -n "$SERVICE_MESH_NS" -l istio=ingressgateway -o jsonpath='{.items[0].spec.host}' 2>/dev/null)
 
-        echo -e "  Gateway Name: ${BOLD}$GW_NAME${RESET} (Namespace: $SERVICE_MESH_NS)"
-        echo "    Hosts: $GW_HOSTS"
-        
-        # Audit TLS Modes
-        if echo "$GW_MODES" | grep -q "SIMPLE"; then
-            printf "    TLS Mode: %bSIMPLE/PASSTHROUGH%b (Externes TLS terminated)\n" "$GREEN" "$RESET"
-        elif echo "$GW_MODES" | grep -q "MUTUAL" || echo "$GW_MODES" | grep -q "ISTIO_MUTUAL"; then
-            printf "    TLS Mode: %bMUTUAL/mTLS%b (Empfohlen)\n" "$GREEN" "$RESET"
-        else
-            printf "    TLS Mode: %b%s%b (WARNUNG: Auf reines HTTP oder fehlendes TLS prüfen)\n" "$RED" "$GW_MODES" "$RESET"
-        fi
-        
-        echo "    Hinweis: Cipher Suites werden vom ServiceMeshControlPlane oder Proxy Settings geerbt/gesteuert."
-        echo "  ---"
-    done
-elif [ "$GATEWAY_COUNT" -gt 0 ]; then
-    # --- Raw Istio Gateways Found (No SMCP) ---
-    printf "  %bWarnung: Keine Service Mesh Control Plane (SMCP) gefunden, aber %s rohe Istio Gateway Objekte erkannt.%b\n" "$YELLOW" "$GATEWAY_COUNT" "$RESET"
-    echo "  Dies können manuelle/externe Istio-Installationen oder verwaiste Objekte sein."
-    echo "  Bitte prüfen Sie deren Einstellungen manuell auf unsichere TLS-Modi mit 'oc get gateway -A -o yaml'."
+        oc get gateway -n "$SERVICE_MESH_NS" -o json | jq -c '.items[]' | while read -r gw; do
+            GW_NAME=$(echo "$gw" | jq -r '.metadata.name')
+            GW_MODES=$(echo "$gw" | jq -r '.spec.servers[] | "\(.tls.mode // "NONE")"' | sort | uniq | tr '\n' ' ')
+            GW_HOSTS=$(echo "$gw" | jq -r '.spec.servers[] | .hosts[]')
+
+            echo -e "  - Gateway: ${BOLD}$GW_NAME${RESET}"
+            printf "    TLS Configuration (Spec): %b%s%b\n" "$BLUE" "$GW_MODES" "$RESET"
+            
+            # Iterate through hosts for Status Quo Check
+            for host in $GW_HOSTS; do
+                if [[ "$host" == "*" ]] && [ ! -z "$INGRESS_ROUTE_HOST" ]; then
+                    target_host="$INGRESS_ROUTE_HOST"
+                    display_host="* (via $INGRESS_ROUTE_HOST)"
+                else
+                    target_host="$host"
+                    display_host="$host"
+                fi
+                
+                echo "    Host: $display_host"
+                
+                # If Route is resolvable, perform active TLS handshake check
+                # 'timeout' ensures script does not hang on connection issues
+                if [ ! -z "$INGRESS_ROUTE_HOST" ] && [[ "$GW_MODES" == *"SIMPLE"* || "$GW_MODES" == *"MUTUAL"* ]]; then
+                     # Check TLS 1.2
+                     if timeout 2 openssl s_client -connect "$INGRESS_ROUTE_HOST:443" -servername "$target_host" -tls1_2 < /dev/null >/dev/null 2>&1; then
+                        echo -e "      -> Live Check: ${GREEN}TLS 1.2 accepted${RESET}"
+                     fi
+                     # Check TLS 1.0 (Info only, no failure)
+                     if timeout 2 openssl s_client -connect "$INGRESS_ROUTE_HOST:443" -servername "$target_host" -tls1 < /dev/null >/dev/null 2>&1; then
+                        echo -e "      -> Live Check: ${YELLOW}TLS 1.0 accepted (Legacy Info)${RESET}"
+                     fi
+                fi
+            done
+            echo ""
+        done
+    fi
+
+elif [ "$(oc get gateway -A --no-headers 2>/dev/null | wc -l)" -gt 0 ]; then
+    # Fallback: Gateways present, but no Control Plane CR found (e.g., manual/upstream Istio)
+    echo -e "  ${YELLOW}Note: Istio Gateways found, but no Red Hat ServiceMeshControlPlane resource detected.${RESET}"
+    echo "  Please check 'Gateway' objects manually."
 else
-    # --- Nothing Found ---
-    printf "  Result: %bService Mesh (Istio/OSSM) Komponenten nicht erkannt. Überspringe Gateway-Prüfung.%b\n" "$GREEN" "$RESET"
+    # Nothing found
+    echo -e "  Result: Service Mesh not installed or inactive."
 fi
-
 
 # ===================================================================================
 # [4] KUBELET
