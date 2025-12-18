@@ -13,7 +13,11 @@ Unlike standard compliance tools that often only check the *desired state* (CRDs
 * **Dynamic Risk Analysis (Ceiling & Floor):**
     * Identifies the **Highest Supported** protocol (Modernity Check).
     * Probes for the **Weakest Allowed** protocol (Risk Check) to find the "weakest link".
-    * Rates findings as `[Modern]`, `[Intermediate]`, or `[Old/Legacy]` based on official Red Hat/Mozilla definitions.
+    * Rates findings as `[Modern]`, `[Intermediate]`, or `[Old/Legacy]`.
+
+* **Source of Truth Reference:**
+    * Dynamically fetches the official cipher definitions for `Old`, `Intermediate`, and `Modern` from the cluster's own API documentation (`oc explain`).
+    * **Standard Alignment:** These profiles strictly follow the **[Mozilla Server-Side TLS Guidelines](https://wiki.mozilla.org/Security/Server_Side_TLS)**, which serve as the upstream standard for Red Hat OpenShift.
 
 * **API Server Deep-Dive:**
     * Detects if a configuration rollout is pending.
@@ -37,9 +41,6 @@ Unlike standard compliance tools that often only check the *desired state* (CRDs
 * **Certificate Expiration Monitor:**
     * Scans critical OpenShift namespaces (`openshift-ingress`, `kube-apiserver`, `etcd`, etc.).
     * Provides a traffic-light status: **OK** (Green), **WARNING** (<90 days, Yellow), **EXPIRING** (<30 days, Red).
-
-* **Source of Truth Reference:**
-    * Dynamically fetches the official cipher definitions for `Old`, `Intermediate`, and `Modern` from the cluster's own API documentation (`oc explain`) to serve as a baseline for the report.
 
 ## 📋 Prerequisites
 
@@ -97,6 +98,13 @@ Unlike standard compliance tools that often only check the *desired state* (CRDs
       Pool: worker -> Profile: Old (KubeletConfig Override)
 
     ... (Reference Section & Certificate Audit follows) ...
+
+## 🔗 Remediation & Configuration
+
+If the audit reveals "Old" or insecure profiles, you can modify the TLS Security Profiles for the Ingress Controller, API Server, or Kubelet.
+
+* **Official Red Hat Documentation:**
+    [Configuring TLS security profiles (OpenShift 4.20)](https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/security_and_compliance/tls-security-profiles)
 
 ## 📚 Use Cases
 
